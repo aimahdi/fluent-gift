@@ -3,7 +3,7 @@
  * Plugin Name: FluentCart Gift Cards
  * Description: Gift Card Addon for FluentCart
  * Version: 1.0.0
- * Author: FluentCart Team
+ * Author: Amimul Ihsan
  * Text Domain: fluent-cart-gift-cards
  * Domain Path: /language
  */
@@ -19,6 +19,7 @@ if (!defined('FLUENTCART_GIFT_CARDS_PLUGIN_PATH')) {
 }
 
 add_action('plugins_loaded', function () {
+
     if (!defined('FLUENT_CART_DIR_FILE')) {
         return;
     }
