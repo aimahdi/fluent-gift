@@ -7,148 +7,224 @@ use FluentCart\App\Services\DateTime\DateTime;
 
 class GiftCardService
 {
-    private $table = 'fct_user_gift_cards';
-
-    public function createCard($userId, $initialBalance, $orderId = null, $meta = [])
+    /**
+     * Create a new Gift Card Coupon for a user
+     */
+    public function createCard($userId, $balance, $orderId, $sourceCode = null)
     {
-        global $wpdb;
-        $table = $wpdb->prefix . $this->table;
+       
+        // Generate code if not provided or valid
+        if (!$sourceCode) {
+            // Balance is likely in cents (10000), format code to dollars (100)
+            $displayBalance = $balance / 100;
+            $formattedCode = $this->generateUniqueCode($displayBalance);
+        } else {
+            // Validate user input code if needed, for update this serves as update logic
+            $formattedCode = $sourceCode;
+        }
+        
 
-        $code = $this->generateUniqueCode($userId);
 
-        // create the coupon in FluentCart side first
-        $couponId = $this->syncToFluentCoupon($code, $initialBalance, $userId);
-
-        $data = [
-            'user_id'         => $userId,
-            'order_id'        => $orderId,
-            'coupon_id'       => $couponId,
-            'code'            => $code,
-            'initial_balance' => $initialBalance,
-            'current_balance' => $initialBalance,
-            'status'          => 'active',
-            'created_at'      => current_time('mysql'),
-            'updated_at'      => current_time('mysql'),
-            'settings'        => json_encode($meta)
+        // Create Coupon Data
+        $couponData = [
+            'title'      => 'Gift Card for User #' . $userId,
+            'code'       => $formattedCode,
+            'status'     => 'active',
+            'type'       => 'fixed',
+            'amount'     => $balance, 
+            'stackable'  => 1, // Make sure it is stackable
+            'start_date' => date('Y-m-d H:i:s'),
+            'end_date'   => null,
+            'settings'   => [
+                'is_gift_card'      => true,
+                'owner_user_id'     => $userId,
+                'initial_balance'   => $balance,
+                'origin_order_id'   => $orderId
+            ]
         ];
 
-        $wpdb->insert($table, $data);
+        // Ensure we create a new coupon
+        $coupon = Coupon::create($couponData);
 
-        return $wpdb->insert_id;
+        return $coupon;
     }
 
     public function getCardByCode($code)
     {
-        global $wpdb;
-        $table = $wpdb->prefix . $this->table;
-        return $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE code = %s", $code));
+        return Coupon::where('code', $code)->first();
     }
 
     public function getCardsByUser($userId)
     {
-        global $wpdb;
-        $table = $wpdb->prefix . $this->table;
-        return $wpdb->get_results($wpdb->prepare("SELECT * FROM $table WHERE user_id = %d AND current_balance > 0 AND status = 'active'", $userId));
+        // FluentCart Coupon doesn't natively have 'owner_user_id' column, it's in settings.
+        // We have to filter. Since this might be heavy if many coupons, 
+        // ideally we would add an index or a meta, but for now lets query all 'active' coupons
+        // that *look* like gift cards or filter them in PHP.
+        // Optimization: Query by code prefix if possible? 'GIFT-'.$userId.'-%'
+        
+        // Better Approach: Use 'likeness' if supported or Get all coupons and filter.
+        // Given we used 'GIFT-{USERID}-...' format:
+        $prefix = 'GIFT-' . $userId . '-';
+        
+        $coupons = Coupon::where('code', 'LIKE', $prefix . '%')
+                         ->where('status', 'active')
+                         ->get();
+        
+        // Double check settings to be sure
+        return $coupons->filter(function($coupon) use ($userId) {
+            $settings = $coupon->settings;
+            // Check if settings is array or string (decoded by model usually)
+            if (is_string($settings)) {
+                $settings = json_decode($settings, true);
+            }
+            return isset($settings['is_gift_card']) && $settings['is_gift_card'] == true;
+        });
     }
 
-    /*
-     * Updates the balance of a gift card.
-     * Logic: If balance reaches 0, mark as redeemed (or keeping active but 0 balance is safer for refunds).
-     */
-    public function debitBalance($cardId, $amount)
+    public function debitBalance($code, $amountToDebit)
     {
-        global $wpdb;
-        $table = $wpdb->prefix . $this->table;
-        
-        $card = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $cardId));
-        if (!$card || $card->current_balance < $amount) {
+        $coupon = $this->getCardByCode($code);
+        if (!$coupon) {
             return false;
         }
 
-        $newBalance = $card->current_balance - $amount;
-        $status = $newBalance <= 0 ? 'redeemed' : 'active';
+        $currentBalance = (float)$coupon->amount;
+        $newBalance = $currentBalance - (float)$amountToDebit;
 
-        $wpdb->update($table, [
-            'current_balance' => $newBalance,
-            'status'          => $status,
-            'updated_at'      => current_time('mysql')
-        ], ['id' => $cardId]);
-
-        // Sync to Coupon
-        $this->updateFluentCoupon($card->coupon_id, $newBalance, $status);
-
-        return true;
-    }
-
-    public function creditBalance($cardId, $amount)
-    {
-        global $wpdb;
-        $table = $wpdb->prefix . $this->table;
-
-        $card = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE id = %d", $cardId));
-        if (!$card) return false;
-
-        $newBalance = $card->current_balance + $amount;
-        // Cap at initial balance? Maybe not, refunds could technically overflow if not careful, but usually capped. 
-        // For now, let's assume strict refund logic handles caps.
-        if ($newBalance > $card->initial_balance) {
-            $newBalance = $card->initial_balance;
+        if ($newBalance < 0) {
+            $newBalance = 0;
         }
 
-        $wpdb->update($table, [
-            'current_balance' => $newBalance,
-            'status'          => 'active', // Should always be active if refunded
-            'updated_at'      => current_time('mysql')
-        ], ['id' => $cardId]);
-
-        // Sync to Coupon
-        $this->updateFluentCoupon($card->coupon_id, $newBalance, 'active');
-
-        return true;
+        $coupon->amount = $newBalance;
+        
+        // If balance is 0, should we disable it?
+        // Maybe keep it active but 0 balance so user sees it?
+        // Or set status to 'archived'?
+        // Let's keep it active with 0 amount for now, or the user can't select it.
+        // Actually if amount is 0, applying it does nothing.
+        
+        $coupon->save();
+        return $newBalance;
     }
 
-    private function generateUniqueCode($userId)
+    public function creditBalance($code, $amountToCredit)
     {
-        // Format: gift-{userid}-{random4}
-        // Random 4 digit/char
-        $postfix = substr(str_shuffle("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 0, 4);
-        return 'gift-' . $userId . '-' . $postfix;
+        $coupon = $this->getCardByCode($code);
+        if (!$coupon) {
+            return false;
+        }
+
+        $coupon->amount = (float)$coupon->amount + (float)$amountToCredit;
+        // Make sure it's active if it was disabled
+        if ($coupon->status != 'active') {
+            $coupon->status = 'active';
+        }
+        $coupon->save();
+
+        return $coupon->amount;
     }
 
-    private function syncToFluentCoupon($code, $amount, $userId)
+    private function generateUniqueCode($price = 0)
     {
-        // Create a Coupon in FluentCart
+        // Requested Format: GIFT-{PRICE}-{RANDOM5}
+        // e.g., GIFT-100-ABCDE
+        $priceStr = (string)(int)$price; // Use integer part of price ?? or full? "100 is the variable" -> likely int.
+
+        $random = substr(str_shuffle("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 0, 5);
+        return strtoupper("GIFT-{$priceStr}-{$random}");
+    }
+
+    /**
+     * Sync method for Admin Template Products
+     * Creates a generic coupon for the product variation if needed.
+     * Note: This is different from the User Gift Card created upon purchase.
+     */
+    public function syncProductCoupons(\FluentCart\App\Models\Product $product, $enable = true)
+    {
+        $variant = $product->variants->first();
+        if (!$variant) {
+            return;
+        }
+
+        if (!$enable) {
+            // Deactivate associated coupon
+            $existingCouponId = \FluentCart\App\Models\Meta::where('object_type', 'product_variation')
+                ->where('object_id', $variant->id)
+                ->where('meta_key', '_associated_gift_coupon_id')
+                ->value('meta_value');
+            
+            if ($existingCouponId) {
+                // Use Update query directly to ensure it hits DB and bypasses any model save issues
+                Coupon::where('id', $existingCouponId)->update(['status' => 'disabled']);
+            }
+            return;
+        }
+
+        $this->ensureCouponForVariant($product, $variant);
+    }
+
+    private function ensureCouponForVariant($product, $variant)
+    {
+        // Check if we already created a coupon for this variant via Meta
+        // Using 'product_variation' as object_type strictly.
+        $existingCouponId = \FluentCart\App\Models\Meta::where('object_type', 'product_variation')
+            ->where('object_id', $variant->id)
+            ->where('meta_key', '_associated_gift_coupon_id')
+            ->value('meta_value');
+
+        if ($existingCouponId) {
+            // Verify if the coupon actually exists
+            $coupon = Coupon::find($existingCouponId);
+            if ($coupon) {
+                // Re-enable if it was disabled
+                if ($coupon->status !== 'active') {
+                    Coupon::where('id', $existingCouponId)->update(['status' => 'active']);
+                }
+                return; 
+            } else {
+                // If ID exists in meta but coupon deleted, we recreate.
+                // Cleanup old meta?
+                \FluentCart\App\Models\Meta::where('object_type', 'product_variation')
+                    ->where('object_id', $variant->id)
+                    ->where('meta_key', '_associated_gift_coupon_id')
+                    ->delete();
+            }
+        }
+
+        // Create New Template Coupon
+        // Use 'item_price' as per ProductVariation model
+        $price = (float)$variant->item_price ?: 0;
+        
+        // Format: GIFT-{PRICE}-{RANDOM5}
+        // "100 is the variable"
+        // Raw price is cents (10000), but code should show dollars (100).
+        $displayPrice = $price / 100;
+        $code = $this->generateUniqueCode($displayPrice);
+        $code = str_replace(' ', '', $code);
+
         $couponData = [
-            'title'      => 'Gift Card ' . $code,
+            'title'      => $product->post_title, // Use variation_title
             'code'       => $code,
             'status'     => 'active',
-            'type'       => 'fixed_cart_amount',
-            'amount'     => $amount,
+            'type'       => 'fixed',
+            'amount'     => $price, 
+            'stackable'  => 1, // Make sure it is stackable
             'start_date' => date('Y-m-d H:i:s'),
-            'end_date'   => null,
             'settings'   => [
-                'is_gift_card' => 'yes',
-                'gift_card_owner' => $userId
+                'is_gift_card_template' => 'yes',
+                'product_id'   => $product->ID, // Post ID
+                'variation_id' => $variant->id
             ]
         ];
 
         $coupon = Coupon::create($couponData);
-        return $coupon->id;
-    }
 
-    private function updateFluentCoupon($couponId, $newBalance, $vmStatus)
-    {
-        $coupon = Coupon::find($couponId);
-        if (!$coupon) return;
-
-        $coupon->amount = $newBalance;
-        
-        if ($vmStatus == 'redeemed' || $newBalance <= 0) {
-            $coupon->status = 'inactive';
-        } else {
-            $coupon->status = 'active';
-        }
-
-        $coupon->save();
+        // Store relation
+        \FluentCart\App\Models\Meta::create([
+            'object_type' => 'product_variation',
+            'object_id'   => $variant->id,
+            'meta_key'    => '_associated_gift_coupon_id',
+            'meta_value'  => $coupon->id
+        ]);
     }
 }

@@ -30,17 +30,29 @@ class CheckoutHandler
         echo '<h4 style="margin-bottom: 10px;">' . __('Your Gift Cards', 'fluent-cart-gift-cards') . '</h4>';
         
         foreach ($cards as $card) {
-            $formattedBalance = $card->current_balance; // Helper::toDecimal() if available
+            // Check status or >0 balance just in case
+            if($card->amount <= 0) continue;
+
+            $formattedBalance = $card->amount; // Helper::formatMoney() would be better but keeping simple
+            
             echo '<div class="fct-wallet-item" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">';
             echo '<span>' . esc_html($card->code) . ' (' . esc_html($formattedBalance) . ')</span>';
             
-            // This button likely needs JS logic to populate the coupon field unless we use a link query param
-            // Since "NO JS" is a rule, we try a query arg approach which works if the checkout handles GET params 
-            // or simply relying on the user copying the code.
-            // But "Select from your wallet" implies a click action.
-            // A simple JS one-liner `onclick` is usually acceptable even with "No JS Customization" rules (which usually means don't compile React).
-            // But strictly:
-            echo '<button type="button" class="fc-btn fc-btn-outline fc-btn-sm" onclick="document.querySelector(\'input[name=coupon_code], input.fc_coupon_input\').value=\''.esc_js($card->code).'\'; document.querySelector(\'.fc_coupon_apply_btn\').click();">' . __('Apply', 'fluent-cart-gift-cards') . '</button>';
+            // Inline JS to autofill existing coupon field
+            // Note: Selectors strictly depend on FluentCart CSS classes. 
+            // Typically: input[name="coupon_code"] or .fc_coupon_input
+            $jsAction = "
+                const input = document.querySelector('input[name=\"coupon_code\"], .fc_coupon_input');
+                const btn = document.querySelector('.fc_coupon_apply_btn, .fc-apply-coupon');
+                if(input && btn) {
+                    input.value = '".esc_js($card->code)."';
+                    btn.click();
+                } else {
+                    alert('Coupon field not found. Code: " . esc_js($card->code) . "');
+                }
+            ";
+
+            echo '<button type="button" class="fc-btn fc-btn-outline fc-btn-sm" onclick="'.esc_attr($jsAction).'">' . __('Apply', 'fluent-cart-gift-cards') . '</button>';
             
             echo '</div>';
         }

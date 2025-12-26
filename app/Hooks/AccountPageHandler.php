@@ -47,7 +47,7 @@ class AccountPageHandler
             echo '<td><code>' . esc_html($card->code) . '</code></td>';
             // Use FluentCart helper for formatting logic if available, distinct currency logic needed?
             // FluentCart Helpers are usually available.
-            echo '<td>' . esc_html($card->current_balance) . '</td>'; 
+            echo '<td>' . esc_html($card->amount) . '</td>'; 
             echo '<td><span class="fc-badge fc-badge-success">' . esc_html(ucfirst($card->status)) . '</span></td>';
             echo '</tr>';
         }

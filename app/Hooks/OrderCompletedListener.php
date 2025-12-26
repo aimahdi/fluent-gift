@@ -39,15 +39,13 @@ class OrderCompletedListener
 
             // Generate card for each quantity
             for ($i = 0; $i < $qty; $i++) {
-                $giftCardService->createCard(
+                $createdCoupon = $giftCardService->createCard(
                     $order->user_id,
                     $amount,
-                    $order->id,
-                    [
-                        'product_id' => $productId,
-                        'item_id' => $item->id
-                    ]
+                    $order->id
                 );
+                
+                // Optional: Store created coupon ID in order item meta for reference?
             }
         }
     }

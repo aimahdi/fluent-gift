@@ -2,7 +2,7 @@
 
 namespace FluentCartGiftCards\App\Boot;
 
-require_once __DIR__ . '/../Database/Migrations/GiftCardTables.php';
+
 
 // Load Services
 require_once __DIR__ . '/../Services/GiftCardService.php';
