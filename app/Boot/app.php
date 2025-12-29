@@ -13,6 +13,7 @@ require_once __DIR__ . '/../Hooks/AccountPageHandler.php';
 require_once __DIR__ . '/../Hooks/CheckoutHandler.php';
 require_once __DIR__ . '/../Hooks/GiftCardTransactionListener.php';
 require_once __DIR__ . '/../Hooks/AdminProductWidget.php';
+require_once __DIR__ . '/../Hooks/GiftCardBalanceInterceptor.php';
 
 class App
 {
@@ -23,8 +24,16 @@ class App
 
     public function init()
     {
-        // Initialize Hooks
-        add_action('fluent_cart/order_completed', [new \FluentCartGiftCards\App\Hooks\OrderCompletedListener(), 'handle']);
+        $orderListener = new \FluentCartGiftCards\App\Hooks\OrderCompletedListener();
+        
+        // Handle when Order is Completed (Final Status)
+        add_action('fluent_cart/order_completed', [$orderListener, 'handle']);
+
+        // Handle when Payment is Confirmed (Immediate Access)
+        // Hooks: fluent_cart/payment_status_changed_to_{status}
+        add_action('fluent_cart/payment_status_changed_to_paid', [$orderListener, 'handlePaymentChange']);
+        add_action('fluent_cart/payment_status_changed_to_completed', [$orderListener, 'handlePaymentChange']); // Just in case
+
 
         // Initialize Product Widget
         // dd('Bootstrapping Widget');

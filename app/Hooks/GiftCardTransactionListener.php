@@ -13,34 +13,21 @@ class GiftCardTransactionListener
         }
 
         $service = new GiftCardService();
+        $userId = $order->user_id;
 
-        foreach ($order->used_coupons as $coupon) {
-            // Check if this coupon code belongs to a gift card
-            // We can just verify if it exists via service, which checks logic
-            $card = $service->getCardByCode($coupon->code);
+        foreach ($order->used_coupons as $couponItem) {
+            $coupon = $service->getCardByCode($couponItem->code);
             
-            // Or better, check if the coupon object itself has the settings if already loaded?
-            // $order->used_coupons usually contains the coupon data used.
-            // Let's assume we re-fetch to be safe and check if it's a gift card.
-            
-            if ($card) { 
-                // Check if it's a gift card 
-                // getCardByCode returns a Coupon model now, need to check settings
-                $settings = $card->settings;
-                if(is_string($settings)) $settings = json_decode($settings, true);
+            if ($coupon && $userId) {
+                // Determine if this is a gift card we track.
+                // 1. Is it a template?
+                // 2. Or do we have it in our inventory?
+                // For safety, checking if it's a "Gift Card Template" is best.
                 
-                if (empty($settings['is_gift_card'])) {
-                     continue;
+                if ($this->isGiftCardTemplate($coupon)) {
+                    // Revoke Access (One-Time Use)
+                    $service->revokeAccess($userId, $coupon);
                 }
-
-                // Balance Logic
-                // We need to know how much was *actually* deducted by THIS coupon.
-                // If $order->coupon_discount_total is used, it sums all coupons.
-                // Assuming 1 coupon for now or relying on total.
-                $appliedAmount = $order->coupon_discount_total; 
-                 
-                // Debit using Code, not ID
-                $service->debitBalance($card->code, $appliedAmount);
             }
         }
     }
@@ -54,21 +41,23 @@ class GiftCardTransactionListener
         if (!$order || empty($order->used_coupons)) return;
 
         $service = new GiftCardService();
-        $refundAmount = $refundData['refund_amount'] ?? 0;
+        $userId = $order->user_id;
 
-        foreach ($order->used_coupons as $coupon) {
-             // Re-fetch to check if gift card
-            $card = $service->getCardByCode($coupon->code);
-            if ($card) {
-                $settings = $card->settings;
-                if(is_string($settings)) $settings = json_decode($settings, true);
-                
-                if (!empty($settings['is_gift_card'])) {
-                    // Credit code
-                    $service->creditBalance($card->code, $refundAmount);
-                    break; 
-                }
+        foreach ($order->used_coupons as $couponItem) {
+            $coupon = $service->getCardByCode($couponItem->code);
+            if ($coupon && $userId) {
+                 if($this->isGiftCardTemplate($coupon)) {
+                     // Grant Access back
+                     $service->grantAccess($userId, $coupon);
+                 }
             }
         }
+    }
+
+    private function isGiftCardTemplate($coupon)
+    {
+        $settings = $coupon->settings;
+        if(is_string($settings)) $settings = json_decode($settings, true);
+        return !empty($settings['is_gift_card_template']);
     }
 }

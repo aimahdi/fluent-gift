@@ -3,50 +3,51 @@
 namespace FluentCartGiftCards\App\Hooks;
 
 use FluentCartGiftCards\App\Services\GiftCardService;
+use FluentCart\App\Models\Order;
 
 class OrderCompletedListener
 {
+    /**
+     * Handle Payment Status Change (e.g. Paid)
+     * Wraps the order object from event data and calls main handler
+     */
+    public function handlePaymentChange($data)
+    {
+        // Data format from OrderStatusUpdated event: ['order' => $order, ...]
+        if (is_array($data) && isset($data['order'])) {
+            $order = $data['order'];
+            if ($order instanceof Order) {
+                $this->handle($order);
+            }
+        }
+    }
+
     public function handle($order)
     {
-        // $order is likely an Eloquent Model or Array. FluentCart usually passes Model.
-        // Based on OrderService analysis: $order->order_items is a collection.
-
         if (!is_object($order) || empty($order->order_items)) {
             return;
         }
 
-        $giftCardService = new GiftCardService();
-
-        foreach ($order->order_items as $item) {
-            // Check if product is gift card
-            // We can check product meta or item meta
-            // Assuming we save '_is_gift_card' in product meta.
-            // But $item->product might need to be loaded.
+        $service = new GiftCardService();
+        $items = $order->order_items;
+        
+        foreach ($items as $item) {
+            // Find Associated Master Coupon Meta on Variation
+            $masterCouponId = \FluentCart\App\Models\Meta::where('object_type', 'product_variation')
+                ->where('object_id', $item->object_id) // variation_id
+                ->where('meta_key', '_associated_gift_coupon_id')
+                ->value('meta_value');
             
-            // In FluentCart, order item has 'post_id'.
-            $productId = $item->post_id;
+            if (!$masterCouponId) continue;
             
-            // Or maybe check specific product type if we register one.
-            $isGiftCard = get_post_meta($productId, '_fct_is_gift_card', true) === 'yes';
+            $coupon = \FluentCart\App\Models\Coupon::find($masterCouponId);
+            if (!$coupon) continue;
 
-            if (!$isGiftCard) {
-                continue;
-            }
-
-            // How many?
-            $qty = $item->quantity;
-            $amount = $item->unit_price; // Or line_total / qty? Use unit_price to be safe.
-
-            // Generate card for each quantity
-            for ($i = 0; $i < $qty; $i++) {
-                $createdCoupon = $giftCardService->createCard(
-                    $order->user_id,
-                    $amount,
-                    $order->id
-                );
-                
-                // Optional: Store created coupon ID in order item meta for reference?
-            }
+            // Grant Access (One-Time / Permission Model)
+            // Even if Qty > 1, the permission is binary (Allowed Email).
+            // Requirement says "add user's email". Duplicate addition handled in service.
+            
+            $service->grantAccess($order->user_id, $coupon);
         }
     }
 }

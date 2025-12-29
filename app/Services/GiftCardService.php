@@ -10,6 +10,9 @@ class GiftCardService
     /**
      * Create a new Gift Card Coupon for a user
      */
+    /**
+     * Create a new Gift Card Coupon for a user
+     */
     public function createCard($userId, $balance, $orderId, $sourceCode = null)
     {
        
@@ -23,7 +26,8 @@ class GiftCardService
             $formattedCode = $sourceCode;
         }
         
-
+        $userInfo = get_userdata($userId);
+        $userEmail = $userInfo ? $userInfo->user_email : '';
 
         // Create Coupon Data
         $couponData = [
@@ -35,6 +39,9 @@ class GiftCardService
             'stackable'  => 1, // Make sure it is stackable
             'start_date' => date('Y-m-d H:i:s'),
             'end_date'   => null,
+            'conditions' => [
+                'allowed_emails' => $userEmail ? [$userEmail] : []
+            ],
             'settings'   => [
                 'is_gift_card'      => true,
                 'owner_user_id'     => $userId,
@@ -45,8 +52,74 @@ class GiftCardService
 
         // Ensure we create a new coupon
         $coupon = Coupon::create($couponData);
+        
+        // Store robust ownership meta
+        if ($userId) {
+            $coupon->updateMeta('_gift_card_owner_id', $userId);
+        }
 
         return $coupon;
+    }
+
+    /**
+     * Grant Access to a Coupon for a User
+     * Adds email to Allowed Emails, tracks in Coupon History, tracks in User Inventory.
+     */
+    public function grantAccess($userId, $coupon)
+    {
+        $userInfo = get_userdata($userId);
+        if (!$userInfo) return;
+        $email = $userInfo->user_email;
+
+        // 1. Add to Allowed Emails (Access Control)
+        $conditions = $coupon->conditions; // decodes json
+        $allowed = $conditions['allowed_emails'] ?? [];
+        if (!in_array($email, $allowed)) {
+            $allowed[] = $email;
+            $conditions['allowed_emails'] = $allowed;
+            $coupon->conditions = $conditions; // encodes json
+            $coupon->save();
+        }
+
+        // 2. Add to Coupon Meta History (Tracking Purchasers)
+        // Key: _gift_card_purchasers_history
+        $history = $coupon->getMeta('_gift_card_purchasers_history', []);
+        if(!is_array($history)) $history = [];
+        if (!in_array($email, $history)) {
+            $history[] = $email;
+            $coupon->updateMeta('_gift_card_purchasers_history', $history);
+        }
+
+        // 3. Add to User Meta Inventory (My Gift Cards List)
+        // Key: _purchased_gift_cards
+        $userInventory = get_user_meta($userId, '_purchased_gift_cards', true);
+        if(!is_array($userInventory)) $userInventory = [];
+        if (!in_array($coupon->id, $userInventory)) {
+            $userInventory[] = $coupon->id;
+            update_user_meta($userId, '_purchased_gift_cards', $userInventory);
+        }
+    }
+
+    /**
+     * Revoke Access (Usage)
+     * Removes email from Allowed Emails. Keeps history/inventory.
+     */
+    public function revokeAccess($userId, $coupon)
+    {
+        $userInfo = get_userdata($userId);
+        if (!$userInfo) return;
+        $email = $userInfo->user_email;
+
+        // Remove from Allowed Emails
+        $conditions = $coupon->conditions;
+        $allowed = $conditions['allowed_emails'] ?? [];
+        
+        if (($key = array_search($email, $allowed)) !== false) {
+            unset($allowed[$key]);
+            $conditions['allowed_emails'] = array_values($allowed); // Re-index
+            $coupon->conditions = $conditions;
+            $coupon->save();
+        }
     }
 
     public function getCardByCode($code)
@@ -56,80 +129,42 @@ class GiftCardService
 
     public function getCardsByUser($userId)
     {
-        // FluentCart Coupon doesn't natively have 'owner_user_id' column, it's in settings.
-        // We have to filter. Since this might be heavy if many coupons, 
-        // ideally we would add an index or a meta, but for now lets query all 'active' coupons
-        // that *look* like gift cards or filter them in PHP.
-        // Optimization: Query by code prefix if possible? 'GIFT-'.$userId.'-%'
-        
-        // Better Approach: Use 'likeness' if supported or Get all coupons and filter.
-        // Given we used 'GIFT-{USERID}-...' format:
-        $prefix = 'GIFT-' . $userId . '-';
-        
-        $coupons = Coupon::where('code', 'LIKE', $prefix . '%')
+        // 1. Fetch Inventory from User Meta
+        $userInventory = get_user_meta($userId, '_purchased_gift_cards', true);
+        if (!is_array($userInventory) || empty($userInventory)) {
+            return new \FluentCart\Framework\Support\Collection([]);
+        }
+
+        $coupons = Coupon::whereIn('id', $userInventory)
                          ->where('status', 'active')
                          ->get();
-        
-        // Double check settings to be sure
-        return $coupons->filter(function($coupon) use ($userId) {
-            $settings = $coupon->settings;
-            // Check if settings is array or string (decoded by model usually)
-            if (is_string($settings)) {
-                $settings = json_decode($settings, true);
+
+        $userInfo = get_userdata($userId);
+        $email = $userInfo ? $userInfo->user_email : '';
+
+        // 2. Inject Status based on Access
+        return $coupons->map(function($coupon) use ($email) {
+            $conditions = $coupon->conditions; // auto-decoded
+            $allowed = $conditions['allowed_emails'] ?? [];
+            
+            // If email is in allowed list, it's Available. Else it's Used/Redeemed.
+            if (in_array($email, $allowed)) {
+                 $coupon->display_status = 'Active';
+                 $coupon->can_use = true;
+            } else {
+                 $coupon->display_status = 'Redeemed';
+                 $coupon->can_use = false;
+                 $coupon->amount = 0; // Visual logic: 0 balance left
             }
-            return isset($settings['is_gift_card']) && $settings['is_gift_card'] == true;
+            
+            return $coupon;
         });
     }
 
-    public function debitBalance($code, $amountToDebit)
-    {
-        $coupon = $this->getCardByCode($code);
-        if (!$coupon) {
-            return false;
-        }
-
-        $currentBalance = (float)$coupon->amount;
-        $newBalance = $currentBalance - (float)$amountToDebit;
-
-        if ($newBalance < 0) {
-            $newBalance = 0;
-        }
-
-        $coupon->amount = $newBalance;
-        
-        // If balance is 0, should we disable it?
-        // Maybe keep it active but 0 balance so user sees it?
-        // Or set status to 'archived'?
-        // Let's keep it active with 0 amount for now, or the user can't select it.
-        // Actually if amount is 0, applying it does nothing.
-        
-        $coupon->save();
-        return $newBalance;
-    }
-
-    public function creditBalance($code, $amountToCredit)
-    {
-        $coupon = $this->getCardByCode($code);
-        if (!$coupon) {
-            return false;
-        }
-
-        $coupon->amount = (float)$coupon->amount + (float)$amountToCredit;
-        // Make sure it's active if it was disabled
-        if ($coupon->status != 'active') {
-            $coupon->status = 'active';
-        }
-        $coupon->save();
-
-        return $coupon->amount;
-    }
-
+    // Deprecated but kept for safety
     private function generateUniqueCode($price = 0)
     {
-        // Requested Format: GIFT-{PRICE}-{RANDOM5}
-        // e.g., GIFT-100-ABCDE
-        $priceStr = (string)(int)$price; // Use integer part of price ?? or full? "100 is the variable" -> likely int.
-
+        $priceStr = (string)(int)$price; 
         $random = substr(str_shuffle("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 0, 5);
         return strtoupper("GIFT-{$priceStr}-{$random}");
     }
@@ -208,7 +243,6 @@ class GiftCardService
             'status'     => 'active',
             'type'       => 'fixed',
             'amount'     => $price, 
-            'stackable'  => 1, // Make sure it is stackable
             'start_date' => date('Y-m-d H:i:s'),
             'settings'   => [
                 'is_gift_card_template' => 'yes',
