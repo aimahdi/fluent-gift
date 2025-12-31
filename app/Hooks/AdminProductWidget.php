@@ -89,7 +89,7 @@ class AdminProductWidget
                 'is_gift_card' => [
                     'wrapperClass' => 'col-span-2 flex items-start flex-col',
                     'label' => __('This is a Gift Card', 'fluent-cart-gift-cards'),
-                    'type' => 'checkbox', // Assuming checkbox is supported
+                    'type' => 'checkbox', 
                     'checkbox_label' => __('Yes, this product is a Gift Card', 'fluent-cart-gift-cards'),
                     'true_value' => 'yes',
                     'false_value' => 'no'
@@ -105,34 +105,42 @@ class AdminProductWidget
 
     public function saveProductWidget($data)
     {
+        static $processing = [];
         $product = $data['product'];
+        $productId = $product->id;
 
-        if (isset($data['data']['metaValue']['fct_gift_card_settings']['is_gift_card'])) {
-            $isGiftCard = $data['data']['metaValue']['fct_gift_card_settings']['is_gift_card'];
+        // Recursion Protection: Prevent infinite loop if update triggers another save
+        if (isset($processing[$productId])) {
+            return;
+        }
+        $processing[$productId] = true;
 
-            // Normalize checkbox value if needed (often comes as 'yes' or boolean or just present)
-            // Based on user sample, we access via form_name structure
+        if (isset($data['data']['metaValue']['fct_gift_card_settings'])) {
+            $settings = $data['data']['metaValue']['fct_gift_card_settings'];
+            
+            // Save Is Gift Card
+            $isGiftCard = isset($settings['is_gift_card']) ? $settings['is_gift_card'] : 'no';
             $product->updateProductMeta('_fct_is_gift_card', $isGiftCard);
 
-            
             // Sync Coupons if enabled
             if ($isGiftCard === 'yes') {
                 $service = new \FluentCartGiftCards\App\Services\GiftCardService();
                 $service->syncProductCoupons($product, true);
 
                 // FORCE 'simple' variation type to simplify UX as requested
-                // This updates the ProductDetail model directly
+                // Use direct update to avoid recursion (model events)
                 $detail = $product->detail; 
                 if ($detail && $detail->variation_type !== 'simple') {
-                    $detail->variation_type = 'simple';
-                    $detail->save();
+                    \FluentCart\App\Models\ProductDetail::where('id', $detail->id)
+                        ->update(['variation_type' => 'simple']);
                 }
 
                 // FORCE 'onetime' payment type for all variations (One-Time Payment)
+                // Use direct update to avoid recursion
                 foreach ($product->variants as $variant) {
                     if ($variant->payment_type !== 'onetime') {
-                        $variant->payment_type = 'onetime';
-                        $variant->save();
+                        \FluentCart\App\Models\ProductVariation::where('id', $variant->id)
+                            ->update(['payment_type' => 'onetime']);
                     }
                 }
             } else {

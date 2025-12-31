@@ -359,6 +359,14 @@ class GiftCardService
      */
     public function syncProductCoupons(\FluentCart\App\Models\Product $product, $enable = true)
     {
+        static $syncedProducts = [];
+        
+        // Service-level Recursion Guard
+        if (isset($syncedProducts[$product->ID])) {
+            return;
+        }
+        $syncedProducts[$product->ID] = true;
+
         $variant = $product->variants->first();
         if (!$variant) {
             return;
@@ -431,7 +439,8 @@ class GiftCardService
             'status'     => 'active',
             'type'       => 'fixed',
             'amount'     => $price, 
-            'start_date' => date('Y-m-d H:i:s')
+            'start_date' => date('Y-m-d H:i:s'),
+            'conditions' => [] 
         ];
 
         $coupon = Coupon::create($couponData);
