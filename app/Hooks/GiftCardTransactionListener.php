@@ -43,10 +43,7 @@ class GiftCardTransactionListener
             }
         }
         
-        error_log("GiftCardDebug: handleOrderPaid triggered for Order #" . $order->id);
-
         if (!$purchaseEmail) {
-            error_log("GiftCardDebug: No purchase email found. Aborting.");
             return; // Cannot grant/revoke access without email
         }
         
@@ -71,8 +68,6 @@ class GiftCardTransactionListener
             }
         }
 
-        error_log("GiftCardDebug: Purchase Email: $purchaseEmail, Customer ID: " . ($customerId ? $customerId : 'Not Found'));
-
         // 1. Process Used Coupons (Redemption Logic - Revoke Access)
         
         // 1. Process Used Coupons (Redemption Logic - Revoke Access)
@@ -81,20 +76,16 @@ class GiftCardTransactionListener
         // Using direct model query to ensure we get the latest data from DB
         try {
             $usedCoupons = \FluentCart\App\Models\AppliedCoupon::where('order_id', $order->id)->get();
-            error_log("GiftCardDebug: DB AppliedCoupon count: " . $usedCoupons->count());
         } catch (\Exception $e) {
             $usedCoupons = collect([]);
-            error_log("GiftCardDebug: AppliedCoupon query failed: " . $e->getMessage());
         }
 
         // Fallback: Check if order object has it hydrated
         if ($usedCoupons->isEmpty() && !empty($order->used_coupons)) {
-             error_log("GiftCardDebug: Fallback to \$order->used_coupons");
              $usedCoupons = $order->used_coupons;
         } else if ($usedCoupons->isEmpty()) {
              // Fallback 2: Check fct_order_items type=coupon?
              // Sometimes usually logic is enough.
-             error_log("GiftCardDebug: No used coupons found in ANY source.");
         }
         
         if (!empty($usedCoupons) && (is_array($usedCoupons) || is_object($usedCoupons))) {
@@ -120,16 +111,11 @@ class GiftCardTransactionListener
                     }
                 }
                 
-                error_log("GiftCardDebug: Lookup method: $lookupMethod - Found: " . ($coupon ? 'Yes (ID: '.$coupon->id.')' : 'No'));
-
                 if (!$coupon) continue;
                 
                 // Use helper to check if it's our gift card
                 if ($this->isGiftCard($coupon)) {
-                     error_log("GiftCardDebug: IS Gift Card. Revoking access for $purchaseEmail");
                      $service->revokeAccess($order->user_id, $coupon, $purchaseEmail, $customerId);
-                } else {
-                    error_log("GiftCardDebug: Coupon found but NOT a gift card.");
                 }
             }
         }
@@ -270,8 +256,6 @@ class GiftCardTransactionListener
         $isTemplate = $coupon->getMeta('_is_gift_card_template');
         $isGiftCard = $coupon->getMeta('_is_gift_card');
         
-        error_log("GiftCardDebug: Checking isGiftCard for Coupon ID " . $coupon->id . " Code: " . $coupon->code . ". Template: " . var_export($isTemplate, true) . ", IsGiftCard: " . var_export($isGiftCard, true));
-
         return $isTemplate === 'yes' || $isGiftCard === 'yes';
     }
 }

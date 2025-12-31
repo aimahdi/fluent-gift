@@ -93,7 +93,7 @@ class AccountPageHandler
                             <thead>
                                 <tr>
                                     <th style="background-color: var(--fct-customer-dashboard-border-color, #f3f4f6); padding: 0.625rem 1.25rem; text-align: left; font-size: 0.875rem; font-weight: 500; color: var(--fluent-cart-customer-dashboard-title-color, #111827); border-bottom: 1px solid var(--fct-customer-dashboard-border-color, #e5e7eb);">
-                                        <?php esc_html_e('Coupon Code', 'fluent-cart-gift-cards'); ?>
+                                        <?php esc_html_e('GiftCard Code', 'fluent-cart-gift-cards'); ?>
                                     </th>
                                     <th style="background-color: var(--fct-customer-dashboard-border-color, #f3f4f6); padding: 0.625rem 1.25rem; text-align: left; font-size: 0.875rem; font-weight: 500; color: var(--fluent-cart-customer-dashboard-title-color, #111827); border-bottom: 1px solid var(--fct-customer-dashboard-border-color, #e5e7eb);">
                                         <?php esc_html_e('Status', 'fluent-cart-gift-cards'); ?>

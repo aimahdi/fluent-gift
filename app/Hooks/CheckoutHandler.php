@@ -13,6 +13,46 @@ class CheckoutHandler
         
         // Hooking to footer for JS to ensure it always loads
         add_action('wp_footer', [$this, 'printGiftCardScripts'], 99);
+
+        // Filter store settings to hide coupon field if gift cards are available
+        add_filter('option_fluent_cart_store_settings', [$this, 'filterStoreSettings']);
+    }
+
+    public function filterStoreSettings($settings)
+    {
+        if (!is_array($settings)) {
+            return $settings;
+        }
+
+        // Only check if we haven't already hidden it (optimization)
+        if (isset($settings['hide_coupon_field']) && $settings['hide_coupon_field'] === 'yes') {
+            return $settings;
+        }
+
+        $userId = get_current_user_id();
+        if (!$userId) {
+            return $settings;
+        }
+
+        static $hasGiftCards = null;
+
+        if ($hasGiftCards === null) {
+            $service = new GiftCardService();
+            $cards = $service->getCardsByUser($userId);
+            
+            // Check for at least one usable card
+            $hasGiftCards = $cards->contains(function($card) {
+                return $card->can_use === true && 
+                       $card->amount > 0 && 
+                       $card->status === 'active';
+            });
+        }
+
+        if ($hasGiftCards) {
+            $settings['hide_coupon_field'] = 'yes';
+        }
+
+        return $settings;
     }
 
     public function renderGiftCardSection()
@@ -33,6 +73,10 @@ class CheckoutHandler
                    $card->amount > 0 && 
                    $card->status === 'active';
         });
+
+        if ($availableCards->isEmpty()) {
+            return;
+        }
 
         ?>
         <li class="fct_gift_card_section" style="flex-direction: column; align-items: flex-start;">
@@ -62,18 +106,7 @@ class CheckoutHandler
                     </div>
                 <?php endif; ?>
 
-                <div class="fct_coupon_input_wrapper" style="display: flex; gap: 5px;">
-                    <input 
-                        type="text" 
-                        id="fct_gift_card_input" 
-                        class="fct_coupon_input" 
-                        placeholder="<?php _e('Enter Gift Card Code', 'fluent-cart-gift-cards'); ?>" 
-                        style="flex: 1; padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 4px;"
-                    >
-                    <button type="button" id="fct_gift_card_apply_manual" style="padding: 6px 12px; background: var(--fluent-cart-primary-color, var(--fct-primary-bg-color, #2563eb)); color: #fff; border: none; border-radius: 4px; cursor: pointer;">
-                        <?php _e('Apply', 'fluent-cart-gift-cards'); ?>
-                    </button>
-                </div>
+                <!-- Input removed as per request -->
                 <div id="fct_gift_card_msg" style="margin-top: 5px; font-size: 12px;"></div>
             </div>
         </li>
@@ -112,14 +145,7 @@ class CheckoutHandler
                 });
 
                 // Manual Apply Handler
-                $(document.body).on('click', '#fct_gift_card_apply_manual', function(e) {
-                    e.preventDefault();
-                    var $wrapper = $(this).closest('.fct_gift_card_container');
-                    var code = $wrapper.find('#fct_gift_card_input').val();
-                    if(code) {
-                        fctApplyGiftCard($(this), code);
-                    }
-                });
+                // Manual handler removed
 
                 function fctApplyGiftCard($btn, code) {
                     var $container = $btn.closest('.fct_gift_card_container');
