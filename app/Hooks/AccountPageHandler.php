@@ -53,69 +53,85 @@ class AccountPageHandler
     public function renderContent()
     {
         $userId = get_current_user_id();
+        if (!$userId) {
+            echo '<div class="fct_customer_profile_content"><p>' . esc_html__('Please log in to view your gift cards.', 'fluent-cart-gift-cards') . '</p></div>';
+            return;
+        }
+
         $service = new GiftCardService();
         $cards = $service->getCardsByUser($userId);
-
-        // Styling inline or rely on global styles. FluentCart classes fc-table etc used.
         ?>
-        <div class="fct_customer_profile_content">
-            <h3 class="fct_page_title"><?php esc_html_e('My Gift Cards', 'fluent-cart-gift-cards'); ?></h3>
-            
+        <div class="fct-customer-dashboard fct-customer-dashboard-layout-width">
+            <div class="fct-customer-dashboard-header">
+                <h4 class="fct-customer-dashboard-title">
+                    <?php esc_html_e('My Gift Cards', 'fluent-cart-gift-cards'); ?>
+                </h4>
+            </div>
+
             <?php if ($cards->isEmpty()): ?>
-                <div class="fct_empty_state">
-                    <p><?php esc_html_e('You do not have any gift card history.', 'fluent-cart-gift-cards'); ?></p>
+                <div class="fct-customer-dashboard-item">
+                    <p class="text-center" style="padding: 2rem 0; color: var(--fluent-cart-customer-dashboard-text-color, #6b7280);">
+                        <?php esc_html_e('You do not have any gift cards yet.', 'fluent-cart-gift-cards'); ?>
+                    </p>
                 </div>
             <?php else: ?>
-                <div class="fc-table-responsive">
-                    <table class="fc-table fct_table">
-                        <thead>
-                            <tr>
-                                <th><?php esc_html_e('Coupon Code', 'fluent-cart-gift-cards'); ?></th>
-                                <th><?php esc_html_e('Status', 'fluent-cart-gift-cards'); ?></th>
-                                <th><?php esc_html_e('Value', 'fluent-cart-gift-cards'); ?></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($cards as $card): ?>
+                <div class="fct-customer-dashboard-item">
+                    <div class="fct-customer-dashboard-table">
+                        <table>
+                            <thead>
                                 <tr>
-                                    <td>
-                                        <code style="font-size: 1.1em; color: #2563eb; background: #eff6ff; padding: 2px 6px; border-radius: 4px;">
-                                            <?php echo esc_html($card->code); ?>
-                                        </code>
-                                    </td>
-                                    <td>
-                                        <?php 
-                                            // 'display_status' is injected by GiftCardService (Active / Redeemed)
-                                            $statusLabel = $card->display_status ?? ucfirst($card->status);
-                                            $statusClass = ($statusLabel === 'Active' && $card->status === 'active') ? 'fc-badge-success' : 'fc-badge-secondary';
-                                            
-                                            echo '<span class="fc-badge ' . esc_attr($statusClass) . '">' . esc_html($statusLabel) . '</span>';
-                                        ?>
-                                    </td>
-                                    <td>
-                                        <?php 
-                                            // Show the original face value if available, or current amount
-                                            // Since we zero out 'amount' when redeemed, we might want to check meta for face value?
-                                            // For this model, Coupon Amount IS the face value usually.
-                                            // But if we zero it for logic, we lose it for display.
-                                            // Service sets amount=0 if Redeemed. 
-                                            // But let's assume user knows what they bought or we show nothing if 0?
-                                            // Actually, showing $0.00 for Redeemed is fine.
-                                            // But ideally we show "Face Value" ($50).
-                                            // The coupon object from DB (before service map) had the value.
-                                            // Service modified the object.
-                                            // To show Face Value, we need to store it or not zero it out in Service?
-                                            // Service set amount=0.
-                                            // Let's just show it. Non-critical if it says $0 for Redeemed.
-                                            echo wc_price($card->amount ?? 0); // Usage of wc_price or fluentcart format helper?
-                                            // FluentCart Helper: \FluentCart\App\Helpers\Helper::formatMoney($amount)
-                                            echo \FluentCart\App\Helpers\Helper::formatMoney($card->amount ?? 0);
-                                        ?>
-                                    </td>
+                                    <th style="background-color: var(--fct-customer-dashboard-border-color, #f3f4f6); padding: 0.625rem 1.25rem; text-align: left; font-size: 0.875rem; font-weight: 500; color: var(--fluent-cart-customer-dashboard-title-color, #111827); border-bottom: 1px solid var(--fct-customer-dashboard-border-color, #e5e7eb);">
+                                        <?php esc_html_e('Coupon Code', 'fluent-cart-gift-cards'); ?>
+                                    </th>
+                                    <th style="background-color: var(--fct-customer-dashboard-border-color, #f3f4f6); padding: 0.625rem 1.25rem; text-align: left; font-size: 0.875rem; font-weight: 500; color: var(--fluent-cart-customer-dashboard-title-color, #111827); border-bottom: 1px solid var(--fct-customer-dashboard-border-color, #e5e7eb);">
+                                        <?php esc_html_e('Status', 'fluent-cart-gift-cards'); ?>
+                                    </th>
+                                    <th style="background-color: var(--fct-customer-dashboard-border-color, #f3f4f6); padding: 0.625rem 1.25rem; text-align: left; font-size: 0.875rem; font-weight: 500; color: var(--fluent-cart-customer-dashboard-title-color, #111827); border-bottom: 1px solid var(--fct-customer-dashboard-border-color, #e5e7eb);">
+                                        <?php esc_html_e('Balance', 'fluent-cart-gift-cards'); ?>
+                                    </th>
                                 </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                                <?php 
+                                $cardCount = 0;
+                                $totalCards = $cards->count();
+                                foreach ($cards as $card): 
+                                    $cardCount++;
+                                    $isLastRow = ($cardCount === $totalCards);
+                                    $borderBottom = $isLastRow ? 'border-bottom: 0;' : 'border-bottom: 1px solid var(--fct-customer-dashboard-border-color, #e5e7eb);';
+                                ?>
+                                    <tr>
+                                        <td style="padding: 0.875rem 1.25rem; text-align: left; font-size: 0.875rem; color: var(--fluent-cart-customer-dashboard-text-color, #374151); border-left: 0; border-right: 0; border-top: 0; <?php echo $borderBottom; ?>">
+                                            <span class="invoice-id">
+                                                <?php echo esc_html($card->code); ?>
+                                            </span>
+                                        </td>
+                                        <td style="padding: 0.875rem 1.25rem; text-align: left; font-size: 0.875rem; color: var(--fluent-cart-customer-dashboard-text-color, #374151); border-left: 0; border-right: 0; border-top: 0; <?php echo $borderBottom; ?>">
+                                            <?php 
+                                                // 'display_status' is injected by GiftCardService (Active / Redeemed)
+                                                $statusLabel = $card->display_status ?? ucfirst($card->status);
+                                                $statusType = ($statusLabel === 'Active' && $card->can_use === true) ? 'success' : 'secondary';
+                                                
+                                                // Use FluentCart badge classes
+                                                $badgeClass = 'fc-badge fc-badge-' . esc_attr($statusType) . ' fc-badge-small';
+                                                echo '<span class="' . $badgeClass . '">' . esc_html($statusLabel) . '</span>';
+                                            ?>
+                                        </td>
+                                        <td style="padding: 0.875rem 1.25rem; text-align: left; font-size: 0.875rem; color: var(--fluent-cart-customer-dashboard-text-color, #374151); border-left: 0; border-right: 0; border-top: 0; <?php echo $borderBottom; ?>">
+                                            <span class="text">
+                                                <?php 
+                                                    // Show the current balance
+                                                    // If redeemed (can_use = false), amount is already set to 0 by service
+                                                    $balance = $card->can_use === true ? ($card->amount ?? 0) : 0;
+                                                    echo \FluentCart\App\Helpers\Helper::toDecimal($balance);
+                                                ?>
+                                            </span>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             <?php endif; ?>
         </div>

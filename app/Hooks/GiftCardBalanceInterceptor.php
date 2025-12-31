@@ -71,13 +71,11 @@ class GiftCardBalanceInterceptor
 
     private function isGiftCard($coupon)
     {
-        // Check settings or some marker
-        $settings = $coupon->settings;
-        if (is_string($settings)) {
-            $settings = json_decode($settings, true);
-        }
+        // Check Meta table for gift card markers
+        $isTemplate = $coupon->getMeta('_is_gift_card_template');
+        $isGiftCard = $coupon->getMeta('_is_gift_card');
         
-        // Supports both old "unique" cards (legacy compatibility) and new "template" cards
-        return !empty($settings['is_gift_card_template']) || !empty($settings['is_gift_card']);
+        // Supports both template cards and unique cards
+        return $isTemplate === 'yes' || $isGiftCard === 'yes';
     }
 }

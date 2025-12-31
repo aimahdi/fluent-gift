@@ -20,6 +20,11 @@ class AdminProductWidget
         if (!isset($_GET['page']) || strpos($_GET['page'], 'fluent-cart') === false) {
              return;
         }
+        
+        // Only output if headers haven't been sent
+        if (headers_sent()) {
+            return;
+        }
         ?>
         <script type="text/javascript">
             jQuery(document).ready(function($) {

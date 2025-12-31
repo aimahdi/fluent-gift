@@ -17,13 +17,22 @@ class CheckoutHandler
 
     public function renderGiftCardSection()
     {
-        // Helper to check if user has cards
+        // Only show for logged-in users
         $userId = get_current_user_id();
-        $cards = [];
-        if ($userId) {
-            $service = new GiftCardService();
-            $cards = $service->getCardsByUser($userId);
+        if (!$userId) {
+            return; // Guest users can still enter code manually below
         }
+
+        $service = new GiftCardService();
+        $cards = $service->getCardsByUser($userId);
+
+        // Filter to only show cards where user has access (email in restrictions)
+        $availableCards = $cards->filter(function($card) {
+            // Only show active cards with balance and where user can use them
+            return $card->can_use === true && 
+                   $card->amount > 0 && 
+                   $card->status === 'active';
+        });
 
         ?>
         <li class="fct_gift_card_section" style="flex-direction: column; align-items: flex-start;">
@@ -36,18 +45,16 @@ class CheckoutHandler
 
             <div class="fct_gift_card_container" style="display: none; width: 100%; margin-top: 10px;">
                 
-                <?php if (!empty($cards)): ?>
+                <?php if ($availableCards->isNotEmpty()): ?>
                     <div class="fct_gift_card_list" style="margin-bottom: 15px;">
                         <span style="display:block; font-size: 12px; color: #666; margin-bottom: 5px;"><?php _e('Your Available Cards:', 'fluent-cart-gift-cards'); ?></span>
-                        <?php foreach ($cards as $card): 
-                             if($card->amount <= 0 || $card->status !== 'active') continue;
-                        ?>
+                        <?php foreach ($availableCards as $card): ?>
                             <div class="fct_gift_card_item" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; background: #f9fafb; padding: 8px; border-radius: 4px; border: 1px solid #e5e7eb;">
                                 <span style="font-weight: 500; font-size: 13px;">
                                     <?php echo esc_html($card->code); ?> 
-                                    <span style="color: #10b981;">(<?php echo esc_html($card->amount); ?>)</span>
+                                    <span style="color: #10b981;">(<?php echo \FluentCart\App\Helpers\Helper::toDecimal($card->amount); ?>)</span>
                                 </span>
-                                <button type="button" class="fct_gift_card_apply_btn_direct" data-code="<?php echo esc_attr($card->code); ?>" style="background: none; border: none; color: #2563eb; cursor: pointer; font-size: 13px; font-weight: 600;">
+                                <button type="button" class="fct_gift_card_apply_btn_direct" data-code="<?php echo esc_attr($card->code); ?>" data-amount="<?php echo esc_attr($card->amount); ?>" style="background: none; border: none; color: var(--fluent-cart-primary-color, var(--fct-primary-bg-color, #2563eb)); cursor: pointer; font-size: 13px; font-weight: 600;">
                                     <?php _e('Apply', 'fluent-cart-gift-cards'); ?>
                                 </button>
                             </div>
@@ -63,7 +70,7 @@ class CheckoutHandler
                         placeholder="<?php _e('Enter Gift Card Code', 'fluent-cart-gift-cards'); ?>" 
                         style="flex: 1; padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 4px;"
                     >
-                    <button type="button" id="fct_gift_card_apply_manual" style="padding: 6px 12px; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer;">
+                    <button type="button" id="fct_gift_card_apply_manual" style="padding: 6px 12px; background: var(--fluent-cart-primary-color, var(--fct-primary-bg-color, #2563eb)); color: #fff; border: none; border-radius: 4px; cursor: pointer;">
                         <?php _e('Apply', 'fluent-cart-gift-cards'); ?>
                     </button>
                 </div>
@@ -120,6 +127,15 @@ class CheckoutHandler
                     
                     $msg.text('<?php _e('Applying...', 'fluent-cart-gift-cards'); ?>').css('color', '#666');
 
+                    if(!fcAjaxUrl) {
+                        $msg.text('Error: Ajax URL missing').css('color', 'red');
+                        return;
+                    }
+
+                    // Apply the coupon - validation happens server-side
+                    var urlParams = new URLSearchParams(window.location.search);
+                    var fctCartHash = urlParams.get('fct_cart_hash');
+
                     var data = {
                         action: 'fluent_cart_checkout_routes',
                         fc_checkout_action: 'apply_coupon',
@@ -127,9 +143,8 @@ class CheckoutHandler
                         _wpnonce: fcNonce
                     };
                     
-                    if(!fcAjaxUrl) {
-                        $msg.text('Error: Ajax URL missing').css('color', 'red');
-                        return;
+                    if (fctCartHash) {
+                        data.fct_cart_hash = fctCartHash;
                     }
 
                     $.post(fcAjaxUrl, data, function(response) {
@@ -141,14 +156,27 @@ class CheckoutHandler
                                     $(fragment.selector).replaceWith(fragment.content);
                                 }
                             });
+                        } else if (response.message) {
+                            // Show the actual error message from the server
+                            $msg.text(response.message).css('color', 'red');
                         } else {
-                            var error = response.message || '<?php _e('Failed to apply.', 'fluent-cart-gift-cards'); ?>';
+                            var error = '<?php _e('Failed to apply.', 'fluent-cart-gift-cards'); ?>';
                             $msg.text(error).css('color', 'red');
                         }
                     }).fail(function(xhr) {
                         var res = xhr.responseJSON;
-                        var error = (res && res.message) ? res.message : '<?php _e('Error applying gift card.', 'fluent-cart-gift-cards'); ?>';
-                        $msg.text(error).css('color', 'red');
+                        if (res && res.message) {
+                            // Only show "add items" if it's specifically a no cart error
+                            if (res.message.toLowerCase().indexOf('no active cart') !== -1 || 
+                                res.message.toLowerCase().indexOf('no cart found') !== -1) {
+                                $msg.text('<?php _e('Please add items to cart first.', 'fluent-cart-gift-cards'); ?>').css('color', 'red');
+                            } else {
+                                $msg.text(res.message).css('color', 'red');
+                            }
+                        } else {
+                            var error = '<?php _e('Error applying gift card.', 'fluent-cart-gift-cards'); ?>';
+                            $msg.text(error).css('color', 'red');
+                        }
                     });
                 }
             });

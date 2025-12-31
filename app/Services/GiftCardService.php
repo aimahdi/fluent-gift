@@ -41,21 +41,18 @@ class GiftCardService
             'end_date'   => null,
             'conditions' => [
                 'allowed_emails' => $userEmail ? [$userEmail] : []
-            ],
-            'settings'   => [
-                'is_gift_card'      => true,
-                'owner_user_id'     => $userId,
-                'initial_balance'   => $balance,
-                'origin_order_id'   => $orderId
             ]
         ];
 
         // Ensure we create a new coupon
         $coupon = Coupon::create($couponData);
         
-        // Store robust ownership meta
+        // Store gift card settings in Meta table
         if ($userId) {
             $coupon->updateMeta('_gift_card_owner_id', $userId);
+            $coupon->updateMeta('_is_gift_card', 'yes');
+            $coupon->updateMeta('_initial_balance', $balance);
+            $coupon->updateMeta('_origin_order_id', $orderId);
         }
 
         return $coupon;
@@ -65,29 +62,43 @@ class GiftCardService
      * Grant Access to a Coupon for a User
      * Adds email to Allowed Emails, tracks in Coupon History, tracks in User Inventory.
      */
-    public function grantAccess($userId, $coupon)
+    public function grantAccess($userId, $coupon, $purchaseEmail = null, $customerId = null)
     {
-        $userInfo = get_userdata($userId);
-        if (!$userInfo) return;
-        $email = $userInfo->user_email;
+        $email = $purchaseEmail;
+        
+        if (!$email && $userId) {
+            $userInfo = get_userdata($userId);
+            if ($userInfo) {
+                $email = $userInfo->user_email;
+            }
+        }
+        
+        if (!$email) return; // Cannot grant access without an email
 
-        // 1. Add to Allowed Emails (Access Control)
+        // 1. Add to Allowed Emails (Access Control) - Using Native 'email_restrictions'
         $conditions = $coupon->conditions; // decodes json
-        $allowed = $conditions['allowed_emails'] ?? [];
+        
+        $emailRestrictionsStr = isset($conditions['email_restrictions']) ? $conditions['email_restrictions'] : '';
+        $allowed = array_filter(array_map('trim', explode(',', $emailRestrictionsStr)));
+
         if (!in_array($email, $allowed)) {
             $allowed[] = $email;
-            $conditions['allowed_emails'] = $allowed;
+            $conditions['email_restrictions'] = implode(',', $allowed);
             $coupon->conditions = $conditions; // encodes json
             $coupon->save();
         }
 
-        // 2. Add to Coupon Meta History (Tracking Purchasers)
-        // Key: _gift_card_purchasers_history
-        $history = $coupon->getMeta('_gift_card_purchasers_history', []);
-        if(!is_array($history)) $history = [];
+        // 2. Add to Coupon Settings History (Tracking Purchasers)
+        // Key: purchasers_history - stored in Meta
+        $historyJson = $coupon->getMeta('_purchasers_history', '[]');
+        $history = json_decode($historyJson, true);
+        if (!is_array($history)) {
+            $history = [];
+        }
+        
         if (!in_array($email, $history)) {
             $history[] = $email;
-            $coupon->updateMeta('_gift_card_purchasers_history', $history);
+            $coupon->updateMeta('_purchasers_history', json_encode($history));
         }
 
         // 3. Add to User Meta Inventory (My Gift Cards List)
@@ -98,27 +109,126 @@ class GiftCardService
             $userInventory[] = $coupon->id;
             update_user_meta($userId, '_purchased_gift_cards', $userInventory);
         }
+
+        // 4. Store coupon ID in fct_customer_meta table as JSON array
+        if ($customerId) {
+            $this->addCouponToCustomerMeta($customerId, $coupon->id);
+        }
+    }
+
+    /**
+     * Add coupon ID to customer meta as JSON array
+     */
+    private function addCouponToCustomerMeta($customerId, $couponId)
+    {
+        if (!$customerId) {
+            return; // Cannot store without customer ID
+        }
+
+        $metaKey = '_purchased_gift_card_coupon_ids';
+        
+        // Get existing meta record
+        $existingMeta = \FluentCart\App\Models\CustomerMeta::where('customer_id', $customerId)
+            ->where('meta_key', $metaKey)
+            ->first();
+        
+        if ($existingMeta) {
+            // Get existing array of coupon IDs
+            $couponIds = $existingMeta->meta_value;
+            if (!is_array($couponIds)) {
+                $couponIds = [];
+            }
+            
+            // Add coupon ID if not already present
+            if (!in_array($couponId, $couponIds)) {
+                $couponIds[] = $couponId;
+                $existingMeta->meta_value = $couponIds; // Will auto-encode to JSON
+                $existingMeta->save();
+            }
+        } else {
+            // Create new meta record with array containing this coupon ID
+            \FluentCart\App\Models\CustomerMeta::create([
+                'customer_id' => $customerId,
+                'meta_key' => $metaKey,
+                'meta_value' => [$couponId] // Will auto-encode to JSON
+            ]);
+        }
     }
 
     /**
      * Revoke Access (Usage)
      * Removes email from Allowed Emails. Keeps history/inventory.
+     * 
+     * @param int $userId User ID (can be 0 for guests)
+     * @param \FluentCart\App\Models\Coupon $coupon The coupon to revoke access from
+     * @param string|null $email Optional email to revoke (if not provided, uses user email)
+     * @param int|null $customerId Optional customer ID for removing from customer meta
      */
-    public function revokeAccess($userId, $coupon)
+    public function revokeAccess($userId, $coupon, $email = null, $customerId = null)
     {
-        $userInfo = get_userdata($userId);
-        if (!$userInfo) return;
-        $email = $userInfo->user_email;
+        // Get email to revoke
+        if (!$email && $userId) {
+            $userInfo = get_userdata($userId);
+            if ($userInfo) {
+                $email = $userInfo->user_email;
+            }
+        }
+        
+        if (!$email) {
+            return; // Cannot revoke without email
+        }
 
         // Remove from Allowed Emails
         $conditions = $coupon->conditions;
-        $allowed = $conditions['allowed_emails'] ?? [];
+        $emailRestrictionsStr = isset($conditions['email_restrictions']) ? $conditions['email_restrictions'] : '';
+        $allowed = array_filter(array_map('trim', explode(',', $emailRestrictionsStr)));
         
         if (($key = array_search($email, $allowed)) !== false) {
             unset($allowed[$key]);
-            $conditions['allowed_emails'] = array_values($allowed); // Re-index
+            $conditions['email_restrictions'] = implode(',', $allowed); // Re-join
             $coupon->conditions = $conditions;
             $coupon->save();
+        }
+
+        // Remove coupon ID from fct_customer_meta table
+        if ($customerId) {
+            $this->removeCouponFromCustomerMeta($customerId, $coupon->id);
+        }
+    }
+
+    /**
+     * Remove coupon ID from customer meta JSON array
+     */
+    private function removeCouponFromCustomerMeta($customerId, $couponId)
+    {
+        $metaKey = '_purchased_gift_card_coupon_ids';
+        
+        // Get existing meta record
+        $existingMeta = \FluentCart\App\Models\CustomerMeta::where('customer_id', $customerId)
+            ->where('meta_key', $metaKey)
+            ->first();
+        
+        if ($existingMeta) {
+            // Get existing array of coupon IDs
+            $couponIds = $existingMeta->meta_value;
+            if (!is_array($couponIds)) {
+                $couponIds = [];
+            }
+            
+            // Remove coupon ID if present
+            if (($key = array_search($couponId, $couponIds)) !== false) {
+                unset($couponIds[$key]);
+                $couponIds = array_values($couponIds); // Re-index array
+                
+                if (empty($couponIds)) {
+                    // If array is empty, delete the meta record
+                    $existingMeta->delete();
+                } else {
+                    // Update with remaining coupon IDs
+                    $existingMeta->meta_value = $couponIds; // Will auto-encode to JSON
+                    $existingMeta->save();
+                }
+            }
         }
     }
 
@@ -127,25 +237,98 @@ class GiftCardService
         return Coupon::where('code', $code)->first();
     }
 
+    /**
+     * Get user's balance for a specific gift card coupon
+     * Returns the coupon amount if user has access, 0 otherwise
+     */
+    public function getUserBalance($userId, $couponId)
+    {
+        $coupon = Coupon::find($couponId);
+        if (!$coupon || $coupon->status !== 'active') {
+            return 0;
+        }
+
+        $userInfo = get_userdata($userId);
+        if (!$userInfo) {
+            return 0;
+        }
+
+        $email = $userInfo->user_email;
+        $conditions = $coupon->conditions;
+        
+        // Check if user's email is in allowed list
+        $emailRestrictionsStr = isset($conditions['email_restrictions']) ? $conditions['email_restrictions'] : '';
+        $allowed = array_filter(array_map('trim', explode(',', $emailRestrictionsStr)));
+        
+        if (in_array($email, $allowed)) {
+            return (float)$coupon->amount;
+        }
+        
+        return 0;
+    }
+
     public function getCardsByUser($userId)
     {
         // 1. Fetch Inventory from User Meta
         $userInventory = get_user_meta($userId, '_purchased_gift_cards', true);
-        if (!is_array($userInventory) || empty($userInventory)) {
+
+        
+        if (!is_array($userInventory)) {
+            $userInventory = [];
+        }
+
+        // 2. Fetch Coupons Owned by User (Data Robustness)
+        // Query Meta table for owner_user_id
+        $ownedCouponIds = \FluentCart\App\Models\Meta::where('object_type', 'coupon')
+            ->where('meta_key', '_gift_card_owner_id')
+            ->where('meta_value', $userId)
+            ->pluck('object_id')
+            ->toArray();
+
+        // 3. Fetch Coupons from Customer Meta (fct_customer_meta table)
+        $customerMetaCouponIds = [];
+        $customer = \FluentCart\App\Models\Customer::where('user_id', $userId)->first();
+        if ($customer) {
+            $customerMeta = \FluentCart\App\Models\CustomerMeta::where('customer_id', $customer->id)
+                ->where('meta_key', '_purchased_gift_card_coupon_ids')
+                ->first();
+            
+            if ($customerMeta && !empty($customerMeta->meta_value)) {
+                $metaValue = $customerMeta->meta_value;
+                // meta_value is auto-decoded, but ensure it's an array
+                if (is_array($metaValue)) {
+                    $customerMetaCouponIds = $metaValue;
+                } elseif (is_string($metaValue)) {
+                    // Fallback: manually decode if needed
+                    $decoded = json_decode($metaValue, true);
+                    if (is_array($decoded)) {
+                        $customerMetaCouponIds = $decoded;
+                    }
+                }
+            }
+        }
+            
+        // Merge and Unique - combine all sources
+        $allCouponIds = array_unique(array_merge($userInventory, $ownedCouponIds, $customerMetaCouponIds));
+
+        if (empty($allCouponIds)) {
             return new \FluentCart\Framework\Support\Collection([]);
         }
 
-        $coupons = Coupon::whereIn('id', $userInventory)
+        $coupons = Coupon::whereIn('id', $allCouponIds)
                          ->where('status', 'active')
                          ->get();
 
         $userInfo = get_userdata($userId);
         $email = $userInfo ? $userInfo->user_email : '';
 
-        // 2. Inject Status based on Access
+        // 4. Inject Status based on Access
         return $coupons->map(function($coupon) use ($email) {
             $conditions = $coupon->conditions; // auto-decoded
-            $allowed = $conditions['allowed_emails'] ?? [];
+            
+            // Check Native 'email_restrictions'
+            $emailRestrictionsStr = isset($conditions['email_restrictions']) ? $conditions['email_restrictions'] : '';
+            $allowed = array_filter(array_map('trim', explode(',', $emailRestrictionsStr)));
             
             // If email is in allowed list, it's Available. Else it's Used/Redeemed.
             if (in_array($email, $allowed)) {
@@ -230,6 +413,11 @@ class GiftCardService
         // Use 'item_price' as per ProductVariation model
         $price = (float)$variant->item_price ?: 0;
         
+        // Ensure price is not zero or negative
+        if ($price <= 0) {
+            return; // Cannot create gift card with zero or negative price
+        }
+        
         // Format: GIFT-{PRICE}-{RANDOM5}
         // "100 is the variable"
         // Raw price is cents (10000), but code should show dollars (100).
@@ -243,15 +431,15 @@ class GiftCardService
             'status'     => 'active',
             'type'       => 'fixed',
             'amount'     => $price, 
-            'start_date' => date('Y-m-d H:i:s'),
-            'settings'   => [
-                'is_gift_card_template' => 'yes',
-                'product_id'   => $product->ID, // Post ID
-                'variation_id' => $variant->id
-            ]
+            'start_date' => date('Y-m-d H:i:s')
         ];
 
         $coupon = Coupon::create($couponData);
+        
+        // Store gift card template settings in Meta table
+        $coupon->updateMeta('_is_gift_card_template', 'yes');
+        $coupon->updateMeta('_gift_card_product_id', $product->ID);
+        $coupon->updateMeta('_gift_card_variation_id', $variant->id);
 
         // Store relation
         \FluentCart\App\Models\Meta::create([
