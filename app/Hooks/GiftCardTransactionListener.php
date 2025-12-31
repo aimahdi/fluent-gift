@@ -24,11 +24,13 @@ class GiftCardTransactionListener
             $order = $data['order'];
         }
 
-        if (!$order || empty($order->order_items)) {
+        if (!$order) {
             return;
         }
 
         $service = new GiftCardService();
+        
+        // 0. PREPARE DATA: Get Email and Customer ID First
         
         // Get customer email - prefer billing email, fallback to user email
         $purchaseEmail = null;
@@ -41,37 +43,16 @@ class GiftCardTransactionListener
             }
         }
         
+        error_log("GiftCardDebug: handleOrderPaid triggered for Order #" . $order->id);
+
         if (!$purchaseEmail) {
+            error_log("GiftCardDebug: No purchase email found. Aborting.");
             return; // Cannot grant/revoke access without email
         }
         
-        // 1. Process Used Coupons (Redemption Logic - Revoke Access)
-        // If the user used a Gift Card to pay for this order, we "redeem" it (revoke access).
-        
-        // Try getting coupons from the Relation (usually usedCoupons or appliedCoupons)
-        // Using direct model query to ensure we get the latest data from DB
-        $usedCoupons = \FluentCart\App\Models\AppliedCoupon::where('order_id', $order->id)->get();
-        
-        if ($usedCoupons->count()) {
-            foreach ($usedCoupons as $couponItem) {
-                // Determine Code
-                $couponCode = $couponItem->code ?? $couponItem->coupon_code ?? '';
-                
-                if (!$couponCode) continue;
-                
-                $coupon = $service->getCardByCode($couponCode);
-                
-                // Use helper to check if it's our gift card
-                if ($coupon && $this->isGiftCardTemplate($coupon)) {
-                     // Revoke Access: Remove email from allowed list so it cannot be used again
-                     $service->revokeAccess($order->user_id, $coupon, $purchaseEmail, $customerId);
-                }
-            }
-        }
-
-        // 2. Process Items (Grant Access for Purchases)
-        // Get customer ID from order, or find/create customer by user_id or email
+        // Get customer ID logic... (existing)
         $customerId = $order->customer_id;
+        // ... (existing identification logic) ...
         if (!$customerId) {
             // Try to find customer by user_id
             if ($order->user_id) {
@@ -82,35 +63,101 @@ class GiftCardTransactionListener
             }
             
             // If still not found, try by email
-            if (!$customerId && $purchaseEmail) {
+            if (!$customerId) {
                 $customer = \FluentCart\App\Models\Customer::where('email', $purchaseEmail)->first();
                 if ($customer) {
                     $customerId = $customer->id;
                 }
             }
         }
-        
-        // Process each order item to find gift card products
-        foreach ($order->order_items as $item) {
-            // Find Associated Master Coupon (template coupon for this product variation)
-            $masterCouponId = \FluentCart\App\Models\Meta::where('object_type', 'product_variation')
-                ->where('object_id', $item->object_id) // variation_id
-                ->where('meta_key', '_associated_gift_coupon_id')
-                ->value('meta_value');
-            
-            if (!$masterCouponId) {
-                continue; // Not a gift card product
-            }
-            
-            $coupon = \FluentCart\App\Models\Coupon::find($masterCouponId);
-            if (!$coupon) {
-                continue;
-            }
 
-            // Grant Access: 
-            // 1. Add buyer's email to coupon's email_restrictions
-            // 2. Store coupon ID in fct_customer_meta table as JSON array
-            $service->grantAccess($order->user_id, $coupon, $purchaseEmail, $customerId);
+        error_log("GiftCardDebug: Purchase Email: $purchaseEmail, Customer ID: " . ($customerId ? $customerId : 'Not Found'));
+
+        // 1. Process Used Coupons (Redemption Logic - Revoke Access)
+        
+        // 1. Process Used Coupons (Redemption Logic - Revoke Access)
+        
+        // Try getting coupons from the Relation (usually usedCoupons or appliedCoupons)
+        // Using direct model query to ensure we get the latest data from DB
+        try {
+            $usedCoupons = \FluentCart\App\Models\AppliedCoupon::where('order_id', $order->id)->get();
+            error_log("GiftCardDebug: DB AppliedCoupon count: " . $usedCoupons->count());
+        } catch (\Exception $e) {
+            $usedCoupons = collect([]);
+            error_log("GiftCardDebug: AppliedCoupon query failed: " . $e->getMessage());
+        }
+
+        // Fallback: Check if order object has it hydrated
+        if ($usedCoupons->isEmpty() && !empty($order->used_coupons)) {
+             error_log("GiftCardDebug: Fallback to \$order->used_coupons");
+             $usedCoupons = $order->used_coupons;
+        } else if ($usedCoupons->isEmpty()) {
+             // Fallback 2: Check fct_order_items type=coupon?
+             // Sometimes usually logic is enough.
+             error_log("GiftCardDebug: No used coupons found in ANY source.");
+        }
+        
+        if (!empty($usedCoupons) && (is_array($usedCoupons) || is_object($usedCoupons))) {
+            foreach ($usedCoupons as $couponItem) {
+                $coupon = null;
+                $lookupMethod = 'none';
+
+                // METHOD 1: Lookup by ID (Most Reliable)
+                // applied_coupons table usually has 'coupon_id'
+                $couponId = is_object($couponItem) ? ($couponItem->coupon_id ?? 0) : ($couponItem['coupon_id'] ?? 0);
+                if ($couponId) {
+                    $coupon = \FluentCart\App\Models\Coupon::find($couponId);
+                    $lookupMethod = 'id';
+                }
+
+                // METHOD 2: Lookup by Code (Fallback)
+                if (!$coupon) {
+                    $couponCode = is_object($couponItem) ? ($couponItem->code ?? $couponItem->coupon_code ?? '') : ($couponItem['code'] ?? '');
+                    if ($couponCode) {
+                        $service = new GiftCardService(); // Ensure service is available
+                        $coupon = $service->getCardByCode($couponCode);
+                        $lookupMethod = 'code (' . $couponCode . ')';
+                    }
+                }
+                
+                error_log("GiftCardDebug: Lookup method: $lookupMethod - Found: " . ($coupon ? 'Yes (ID: '.$coupon->id.')' : 'No'));
+
+                if (!$coupon) continue;
+                
+                // Use helper to check if it's our gift card
+                if ($this->isGiftCard($coupon)) {
+                     error_log("GiftCardDebug: IS Gift Card. Revoking access for $purchaseEmail");
+                     $service->revokeAccess($order->user_id, $coupon, $purchaseEmail, $customerId);
+                } else {
+                    error_log("GiftCardDebug: Coupon found but NOT a gift card.");
+                }
+            }
+        }
+
+        // 2. Process Items (Grant Access for Purchases)
+        // 2. Process Items (Grant Access for Purchases)
+        if (!empty($order->order_items)) {
+            foreach ($order->order_items as $item) {
+                // Find Associated Master Coupon (template coupon for this product variation)
+                $masterCouponId = \FluentCart\App\Models\Meta::where('object_type', 'product_variation')
+                    ->where('object_id', $item->object_id) // variation_id
+                    ->where('meta_key', '_associated_gift_coupon_id')
+                    ->value('meta_value');
+                
+                if (!$masterCouponId) {
+                    continue; // Not a gift card product
+                }
+                
+                $coupon = \FluentCart\App\Models\Coupon::find($masterCouponId);
+                if (!$coupon) {
+                    continue;
+                }
+
+                // Grant Access: 
+                // 1. Add buyer's email to coupon's email_restrictions
+                // 2. Store coupon ID in fct_customer_meta table as JSON array
+                $service->grantAccess($order->user_id, $coupon, $purchaseEmail, $customerId);
+            }
         }
     }
 
@@ -172,7 +219,7 @@ class GiftCardTransactionListener
                 if (!$couponCode) continue;
                 
                 $coupon = $service->getCardByCode($couponCode);
-                if ($coupon && $this->isGiftCardTemplate($coupon)) {
+                if ($coupon && $this->isGiftCard($coupon)) {
                     // Restore Access: Add email back to allowed list so they can use it again
                     $purchaseEmail = null;
                     if (!empty($order->billing_address) && isset($order->billing_address['email'])) {
@@ -215,12 +262,16 @@ class GiftCardTransactionListener
     }
 
     /**
-     * Helper to identify Gift Card Template Coupons
+     * Helper to identify Gift Card Template Coupons or Unique Cards
      */
-    private function isGiftCardTemplate($coupon)
+    private function isGiftCard($coupon)
     {
-        // Check Meta table for gift card template flag
+        // Check Meta table for gift card flags
         $isTemplate = $coupon->getMeta('_is_gift_card_template');
-        return $isTemplate === 'yes';
+        $isGiftCard = $coupon->getMeta('_is_gift_card');
+        
+        error_log("GiftCardDebug: Checking isGiftCard for Coupon ID " . $coupon->id . " Code: " . $coupon->code . ". Template: " . var_export($isTemplate, true) . ", IsGiftCard: " . var_export($isGiftCard, true));
+
+        return $isTemplate === 'yes' || $isGiftCard === 'yes';
     }
 }

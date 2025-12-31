@@ -73,18 +73,23 @@ class GiftCardService
             }
         }
         
-        if (!$email) return; // Cannot grant access without an email
+        if (!$email) return;
+
+        // Normalization
+        $email = strtolower(trim($email));
 
         // 1. Add to Allowed Emails (Access Control) - Using Native 'email_restrictions'
         $conditions = $coupon->conditions; // decodes json
         
         $emailRestrictionsStr = isset($conditions['email_restrictions']) ? $conditions['email_restrictions'] : '';
         $allowed = array_filter(array_map('trim', explode(',', $emailRestrictionsStr)));
+        // Normalize stored emails too just in case
+        $allowed = array_map('strtolower', $allowed);
 
         if (!in_array($email, $allowed)) {
             $allowed[] = $email;
-            $conditions['email_restrictions'] = implode(',', $allowed);
-            $coupon->conditions = $conditions; // encodes json
+            $conditions['email_restrictions'] = implode(',', $allowed); // encodes json
+            $coupon->conditions = $conditions;
             $coupon->save();
         }
 
@@ -95,6 +100,8 @@ class GiftCardService
         if (!is_array($history)) {
             $history = [];
         }
+        // Normalize history
+        $history = array_map('strtolower', $history);
         
         if (!in_array($email, $history)) {
             $history[] = $email;
@@ -178,10 +185,14 @@ class GiftCardService
             return; // Cannot revoke without email
         }
 
+        // Normalization
+        $email = strtolower(trim($email));
+
         // Remove from Allowed Emails
         $conditions = $coupon->conditions;
         $emailRestrictionsStr = isset($conditions['email_restrictions']) ? $conditions['email_restrictions'] : '';
         $allowed = array_filter(array_map('trim', explode(',', $emailRestrictionsStr)));
+        $allowed = array_map('strtolower', $allowed);
         
         if (($key = array_search($email, $allowed)) !== false) {
             unset($allowed[$key]);
@@ -190,10 +201,10 @@ class GiftCardService
             $coupon->save();
         }
 
-        // Remove coupon ID from fct_customer_meta table
-        if ($customerId) {
-            $this->removeCouponFromCustomerMeta($customerId, $coupon->id);
-        }
+        // Keep the coupon in the wallet history, just revoke access rights
+        // if ($customerId) {
+        //     $this->removeCouponFromCustomerMeta($customerId, $coupon->id);
+        // }
     }
 
     /**
@@ -253,12 +264,13 @@ class GiftCardService
             return 0;
         }
 
-        $email = $userInfo->user_email;
+        $email = strtolower(trim($userInfo->user_email));
         $conditions = $coupon->conditions;
         
         // Check if user's email is in allowed list
         $emailRestrictionsStr = isset($conditions['email_restrictions']) ? $conditions['email_restrictions'] : '';
         $allowed = array_filter(array_map('trim', explode(',', $emailRestrictionsStr)));
+        $allowed = array_map('strtolower', $allowed);
         
         if (in_array($email, $allowed)) {
             return (float)$coupon->amount;
@@ -320,7 +332,7 @@ class GiftCardService
                          ->get();
 
         $userInfo = get_userdata($userId);
-        $email = $userInfo ? $userInfo->user_email : '';
+        $email = $userInfo ? strtolower(trim($userInfo->user_email)) : '';
 
         // 4. Inject Status based on Access
         return $coupons->map(function($coupon) use ($email) {
@@ -329,6 +341,7 @@ class GiftCardService
             // Check Native 'email_restrictions'
             $emailRestrictionsStr = isset($conditions['email_restrictions']) ? $conditions['email_restrictions'] : '';
             $allowed = array_filter(array_map('trim', explode(',', $emailRestrictionsStr)));
+            $allowed = array_map('strtolower', $allowed);
             
             // If email is in allowed list, it's Available. Else it's Used/Redeemed.
             if (in_array($email, $allowed)) {

@@ -22,7 +22,7 @@ class AccountPageHandler
         
         $newItem = [
             'my_gift_cards' => [
-                'label' => __('My Gift Cards', 'fluent-cart-gift-cards'),
+                'label' => __('Gift Cards', 'fluent-cart-gift-cards'),
                 'css_class' => 'fct_route',
                 'link'  => $baseUrl . 'gift-cards',
                 'icon_svg' => '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="4" rx="1" ry="1"></rect><line x1="12" y1="8" x2="12" y2="21"></line><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"></path><path d="M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5"></path></svg>'
@@ -63,7 +63,7 @@ class AccountPageHandler
         ?>
         <div class="fct-customer-dashboard fct-customer-dashboard-layout-width">
             <div class="fct-customer-dashboard-header">
-                <h4 class="fct-customer-dashboard-title">
+                <h4 class="fct-customer-dashboard-title" style="font-weight: bold;">
                     <?php esc_html_e('My Gift Cards', 'fluent-cart-gift-cards'); ?>
                 </h4>
             </div>
@@ -77,6 +77,18 @@ class AccountPageHandler
             <?php else: ?>
                 <div class="fct-customer-dashboard-item">
                     <div class="fct-customer-dashboard-table">
+                        <style>
+                            .fct-customer-dashboard-table table {
+                                width: 100% !important;
+                                border-collapse: collapse; /* Ensure borders look nice with width 100% */
+                            }
+                            .fct-customer-dashboard-table table, 
+                            .fct-customer-dashboard-table td, 
+                            .fct-customer-dashboard-table th, 
+                            .fct-customer-dashboard-table tr {
+                              border: 1px solid var(--fct-customer-dashboard-border-color) !important;
+                            }
+                        </style>
                         <table>
                             <thead>
                                 <tr>

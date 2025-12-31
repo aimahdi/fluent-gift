@@ -57,32 +57,8 @@ class App
                 return $canUse;
             }
 
-            // Check if this is a gift card coupon
-            $isGiftCard = $coupon->getMeta('_is_gift_card_template') === 'yes' || 
-                         $coupon->getMeta('_is_gift_card') === 'yes';
-            
-            if (!$isGiftCard) {
-                return $canUse;
-            }
-
-            // Get cart item total (excluding shipping)
-            $cartItemTotal = 0;
-            if (!empty($cart->cart_data)) {
-                foreach ($cart->cart_data as $item) {
-                    $cartItemTotal += isset($item['line_total']) ? (float)$item['line_total'] : 0;
-                }
-            }
-            
-            // Get gift card amount
-            $giftCardAmount = (int)$coupon->amount;
-            
-            // Validate: gift card amount cannot exceed cart item total
-            if ($giftCardAmount > $cartItemTotal) {
-                return new \WP_Error(
-                    'gift_card_amount_exceeds_total',
-                    __('Gift card amount cannot exceed cart item total (excluding shipping).', 'fluent-cart-gift-cards')
-                );
-            }
+            // Validation removed to allow using gift cards even if amount > cart total
+            // (Standard FluentCart behavior will cap discount at cart total)
             
             return $canUse;
         }, 10, 2);
