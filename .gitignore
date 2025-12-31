@@ -1,0 +1,26 @@
+# System files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Logs
+debug.log
+error.log
+*.log
+
+# Build & Dependencies
+node_modules/
+vendor/
+*.zip
+
+# OS
+.AppleDouble
+.LSOverride
+
+# WP Specific
+wp-config.php

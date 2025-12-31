@@ -1,10 +1,11 @@
 <?php
 /**
- * Plugin Name: FluentCart Gift Cards
- * Description: Gift Card Addon for FluentCart
+ * Plugin Name: FluentGift — Native Gift Card Add-on for FluentCart
+ * Description: Native Gift Card Add-on for FluentCart. Developed by FluentSoloForge.
  * Version: 1.0.0
  * Author: Amimul Ihsan
- * Text Domain: fluent-cart-gift-cards
+ * Author URI: https://aimahdi.com
+ * Text Domain: fluent-gift
  * Domain Path: /language
  */
 
@@ -27,7 +28,3 @@ add_action('plugins_loaded', function () {
     require_once __DIR__ . '/app/Boot/app.php';
 });
 
-register_activation_hook(__FILE__, function () {
-    require_once __DIR__ . '/app/Database/Migrations/GiftCardTables.php';
-    (new \FluentCartGiftCards\App\Database\Migrations\GiftCardTables())->migrate();
-});

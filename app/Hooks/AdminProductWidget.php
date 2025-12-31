@@ -80,17 +80,17 @@ class AdminProductWidget
 
 
         $widgets[] = [
-            'title' => __('Gift Card Settings', 'fluent-cart-gift-cards'),
-            'sub_title' => __('Configure Gift Card options for this product.', 'fluent-cart-gift-cards'),
+            'title' => __('Gift Card Settings', 'fluent-gift'),
+            'sub_title' => __('Configure Gift Card options for this product.', 'fluent-gift'),
             'type' => 'form',
             'form_name' => 'fct_gift_card_settings',
             'name' => 'gift_card_settings',
             'schema' => [
                 'is_gift_card' => [
                     'wrapperClass' => 'col-span-2 flex items-start flex-col',
-                    'label' => __('This is a Gift Card', 'fluent-cart-gift-cards'),
+                    'label' => __('This is a Gift Card', 'fluent-gift'),
                     'type' => 'checkbox', 
-                    'checkbox_label' => __('Yes, this product is a Gift Card', 'fluent-cart-gift-cards'),
+                    'checkbox_label' => __('Yes, this product is a Gift Card', 'fluent-gift'),
                     'true_value' => 'yes',
                     'false_value' => 'no'
                 ],
